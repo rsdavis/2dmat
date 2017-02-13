@@ -1,0 +1,63 @@
+
+Nx = 400
+Ny = 400
+dx = 1.0 
+dt = 0.5 
+
+nsteps   = 1000
+out_freq = 50
+
+epsx =  0.06
+epsy = -0.06
+
+beta = 0.002 
+Mn = 1.0 
+H = 0.0
+gamma = 1.0 
+alpha = 10.
+kappa = 0.219298245614035    
+change_etap_thresh = 0.05
+
+mu_el = 1. 
+nu_el = 0.24
+
+M0_chem_a = 0.0015
+M0_chem_b = 0.0040
+M0_chem_c = 0.0025
+
+M1_chem_a = 0.0015
+M1_chem_b = 0.0040
+M1_chem_c = 0.0025
+
+M0_norm = 1.00
+M1_norm = 1.00
+
+#### MoSe2
+
+M0_2H_a = 3.318
+M0_2H_b = 5.747
+M0_Tp_a = 3.280
+M0_Tp_b = 5.971
+
+##### WSe2
+
+M1_2H_a = 3.315
+M1_2H_b = 5.744
+M1_Tp_a = 3.300
+M1_Tp_b = 5.944
+
+#### MoTe2
+
+#M0_2H_a = 3.550
+#M0_2H_b = 6.149
+#M0_Tp_a = 3.455
+#M0_Tp_b = 6.380
+
+#### WTe2
+
+#M1_2H_a = 3.552
+#M1_2H_b = 6.154
+#M1_Tp_a = 3.491
+#M1_Tp_b = 6.320
+
+
