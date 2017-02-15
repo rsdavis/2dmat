@@ -1,12 +1,12 @@
 
+#include <stdio.h>
+
 #include <iostream>
 #include <iomanip>
 #include <sstream>
-#include <stdio.h>
 #include <string>
-#include <math.h>
+#include <cmath>
 
-#include <complex.h> // use standard complex type, must come before fftw
 #include <fftw3-mpi.h>
 
 #include "parameter_file.h"
@@ -15,8 +15,8 @@
 #include "log.h"
 #include "initialize.h"
 
-#define Re 0
-#define Im 1
+const int Re = 0;
+const int Im = 0;
 
 struct input_parameters {
 
@@ -282,7 +282,6 @@ void calc_chemical_potential(double ** chem, double ** eta, double *** sigeps,
                              double ** lap, double * phi, ptrdiff_t local_n0, ptrdiff_t N1, struct input_parameters ip)
 {
 
-    double h_film = pow(6*ip.kappa*(1-ip.nu_el)/ip.mu_el, 1.0/3.0);
     double EelAppl[3] = {0, 0, 0};
     const int N1r = 2*(N1/2+1);
 
@@ -459,7 +458,7 @@ void calc_eps(double *** eps, fftw_complex ** keps, double ** kxy, fftw_complex 
     normalize(eps[0][0], N0, N1, local_n0);
     normalize(eps[1][1], N0, N1, local_n0);
     normalize(eps[0][1], N0, N1, local_n0);
-    memcpy(eps[1][0], eps[0][1], sizeof(double)*local_n0*2*(N1/2+1));
+    std::memcpy(eps[1][0], eps[0][1], sizeof(double)*local_n0*2*(N1/2+1));
 }
 
 void calc_lap(double ** lap, fftw_complex ** klap, fftw_complex ** keta, double ** kxy, ptrdiff_t N0, ptrdiff_t N1, ptrdiff_t local_n0)
