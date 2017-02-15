@@ -16,7 +16,7 @@
 #include "initialize.h"
 
 const int Re = 0;
-const int Im = 0;
+const int Im = 1;
 
 struct input_parameters {
 
