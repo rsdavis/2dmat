@@ -6,6 +6,7 @@
 #include <sstream>
 #include <string>
 #include <cmath>
+#include <cstring>
 
 #include <fftw3-mpi.h>
 
