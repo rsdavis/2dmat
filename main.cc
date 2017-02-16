@@ -623,29 +623,30 @@ int main(int argc, char ** argv)
 
     ptrdiff_t alloc_local = fftw_mpi_local_size_2d(N0, N1/2+1, MPI_COMM_WORLD, &local_n0, &local_0_start);
 
-    double *** G    = (double ***) kd_alloc2(sizeof(double), 3, 2, 2, alloc_local);
-    double ** kxy   = (double **) kd_alloc2(sizeof(double), 2, 2, alloc_local);
+    double **** lam;    // stiffness tensor         lam[i][j][k][l]
+    double *** G;       // greens functions         G[i][j][ndx]
+    double ** kxy;      // fourier k-vectors        kxy[i][ndx] 
+    double **** epsT;   // transformation strains   epsT[M][p][i][j]
+    double **** eps0;   // transformation strains   eps0[p][i][j][ndx]
+    double **** sig0;   // transformation stress    sig0[p][i][j][ndx]
+    double *** sigeps;  // sig0*eps0                sigeps[p][q][ndx]
+    double ** epsbar;   // homogeneous strain       epsbar[i][j]
+    double *** eps;     // heterogeneous strain     eps[p][i][j][ndx]
+    double *** s0n2;    // sig0*eta                 s0n2[i][j][ndx]
 
-    double **** epsT = (double ****) kd_alloc2(sizeof(double), 4, 2, 3, 2, 2);
+    fftw_complex *** ks0n2; // fourier transform of s0n2, ks0n2[p][j+k][ndx]
 
-    double **** eps0 = (double ****) kd_alloc2(sizeof(double), 4, 3, 2, 2, 2*alloc_local);
-    double **** sig0 = (double ****) kd_alloc2(sizeof(double), 4, 3, 2, 2, 2*alloc_local);
-    double *** sigeps = (double ***) kd_alloc2(sizeof(double), 3, 3, 3, 2*alloc_local);
-
-    double *** eps  = (double ***) kd_alloc2(sizeof(double), 3, 2, 2, 2*alloc_local);
-    double **** lam = (double ****) kd_alloc2(sizeof(double), 4, 2, 2, 2, 2);
-    double ** epsbar = (double **) kd_alloc2(sizeof(double), 2, 2, 2);
-    double *** s0n2 = (double ***) kd_alloc2(sizeof(double), 3, 3, 3, 2*alloc_local);
-    fftw_complex *** ks0n2 = (fftw_complex ***) kd_alloc2(sizeof(fftw_complex), 3, 3, 3, alloc_local);
-
-/*
-    for (int p=0; p<3; p++)
-    for (int i=0; i<3; i++)
-    {
-        s0n2[p][i] = fftw_alloc_real(2*alloc_local);
-        ks0n2[p][i] = fftw_alloc_complex(alloc_local);
-    }
-    */
+    lam     = (double ****) kd_alloc2(sizeof(double), 4, 2, 2, 2, 2);
+    G       = (double ***) kd_alloc2(sizeof(double), 3, 2, 2, alloc_local);
+    kxy     = (double **) kd_alloc2(sizeof(double), 2, 2, alloc_local);
+    epsT    = (double ****) kd_alloc2(sizeof(double), 4, 2, 3, 2, 2);
+    eps0    = (double ****) kd_alloc2(sizeof(double), 4, 3, 2, 2, 2*alloc_local);
+    sig0    = (double ****) kd_alloc2(sizeof(double), 4, 3, 2, 2, 2*alloc_local);
+    sigeps  = (double ***) kd_alloc2(sizeof(double), 3, 3, 3, 2*alloc_local);
+    epsbar  = (double **) kd_alloc2(sizeof(double), 2, 2, 2);
+    eps     = (double ***) kd_alloc2(sizeof(double), 3, 2, 2, 2*alloc_local);
+    s0n2    = (double ***) kd_alloc2(sizeof(double), 3, 3, 3, 2*alloc_local);
+    ks0n2   = (fftw_complex ***) kd_alloc2(sizeof(fftw_complex), 3, 3, 3, alloc_local);
 
     double ** chem = new double * [3];
     chem[0] = fftw_alloc_real(2*alloc_local);
