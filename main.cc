@@ -564,6 +564,97 @@ double calc_area(double ** eta, ptrdiff_t local_n0, ptrdiff_t N0, ptrdiff_t N1, 
     return sum/(N0*N1);
 }
 
+void calc_dw(double ** dw, double * w, ptrdiff_t local_n0, ptrdiff_t N1, double dx)
+{
+    const int N1r = 2*(N1/2+1);
+    const int X = 0;
+    const int Y = 1;
+
+    double * left   = new double [(int)N1];
+    double * right  = new double [(int)N1];
+    MPI_Request request;
+    MPI_Status status;
+    int dest, source, count, offset, tag=0;
+    int rank, np;
+
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &np);
+
+    // send right, recieve left
+    dest = rank+1 ? rank<np-1 : 0;
+    source = rank-1 ? rank>0 : np-1;
+    offset = (local_n0-1)*N1r;
+    count = (int) N1;
+    MPI_Isend(w+offset, count, MPI_DOUBLE, dest, tag, MPI_COMM_WORLD, &request);     
+    MPI_Recv(left, count, MPI_DOUBLE, source, tag, MPI_COMM_WORLD, &status); 
+
+    // send left, recieve right
+    dest = rank-1 ? rank>0 : np-1;
+    source = rank+1 ? rank<np-1 : 0;
+    MPI_Isend(w, count, MPI_DOUBLE, dest, tag, MPI_COMM_WORLD, &request);
+    MPI_Recv(right, count, MPI_DOUBLE, source, tag, MPI_COMM_WORLD, &status);
+
+    for (int i=0; i<local_n0; i++)
+    for (int j=0; j<N1; j++)
+    {
+        int ndx = i*N1r + j;
+
+        int xm = (i-1)*N1r + j  ? i>0           : left[j];
+        int xp = (i+1)*N1r + j  ? i+1<local_n0  : right[j];
+        int ym = ndx - 1        ? j>0           : i*N1r + (N1-1);
+        int yp = ndx + 1        ? j+1<N1        : i*N1r + (0);
+
+        dw[X][ndx] = (w[xp] - w[xm])/(2*dx);
+        dw[Y][ndx] = (w[yp] - w[ym])/(2*dx);
+    }
+
+    delete [] left;
+    delete [] right;
+}
+
+void calc_dFdw(double * w, double ** dw, double **** lam, double *** eps, double ** epsbar, double *** s0n2, ptrdiff_t local_n0, ptrdiff_t N1)
+{
+    const int N1r = 2*(N1/2+1);
+    const int N1c = N1/2 + 1;
+
+    double * dfdw1 = fftw_alloc_real(local_n0*N1r);
+    double * dfdw2 = fftw_alloc_real(local_n0*N1r);
+    fftw_complex * kdfdw1 = fftw_alloc_complex(local_n0*N1c);
+    fftw_complex * kdfdw2 = fftw_alloc_complex(local_n0*N1c);
+
+    planF_eta[0] = fftw_mpi_plan_dft_r2c_2d(N0, N1, eta[0], keta[0], MPI_COMM_WORLD, FFTW_MEASURE);
+
+    fftw_plan fftw1 = fftw_mpi_plan_dft_r2c_2d(N0, N1, dfdw1, kdfdw1, MPI_COMM_WORLD, FFTW_ESTIMATE);
+    fftw_plan fftw2 = fftw_mpi_plan_dft_r2c_2d(N0, N1, dfdw2, kdfdw2, MPI_COMM_WORLD, FFTW_ESTIMATE);
+
+    for (int i=0; i<local_n0; i++)
+    for (int j=0; j<N1; j++)
+    {
+        int ndx = i*N1r + j;
+        double dfdw1 = 0;
+        double dfdw2 = 0;
+
+        for (int ii=0; ii<2; ii++)
+        for (int jj=0; jj<2; jj++)
+            dfdw1 += (epsbar[ii][jj] - s0n2[ii][jj][ndx])*dw[ii][ndx];
+
+        for (int ii=0; ii<2; ii++)
+        for (int jj=0; jj<2; jj++)
+        for (int kk=0; kk<2; kk++)
+        for (int ll=0; ll<2; ll++)
+            dfdw2 += lam[ii][jj][kk][ll]*dw[ii][ndx]*(eps[ii][jj][ndx] + dw[jj][ndx]*dw[kk][ndx]);
+    }
+
+    fftw_execute(fftw1);
+    fftw_execute(fftw2);
+
+    fftw_free(dfdw1);
+    fftw_free(dfdw2);
+    fftw_free(kdfdw1);
+    fftw_free(kdfdw2);
+}
+
+
 int main(int argc, char ** argv)
 {
 
@@ -633,6 +724,8 @@ int main(int argc, char ** argv)
     double ** epsbar;   // homogeneous strain       epsbar[i][j]
     double *** eps;     // heterogeneous strain     eps[p][i][j][ndx]
     double *** s0n2;    // sig0*eta                 s0n2[i][j][ndx]
+    double * w;         // out-of-plane bending     w[ndx]
+    double ** dw;       // dw/dx, dw/dy             dw[i][ndx]
 
     fftw_complex *** ks0n2; // fourier transform of s0n2, ks0n2[p][j+k][ndx]
 
@@ -646,6 +739,8 @@ int main(int argc, char ** argv)
     epsbar  = (double **) kd_alloc2(sizeof(double), 2, 2, 2);
     eps     = (double ***) kd_alloc2(sizeof(double), 3, 2, 2, 2*alloc_local);
     s0n2    = (double ***) kd_alloc2(sizeof(double), 3, 3, 3, 2*alloc_local);
+    w       = fftw_alloc_real(2*alloc_local);
+    dw      = (double **) kd_alloc2(sizeof(double), 2, 2, 2*alloc_local);
     ks0n2   = (fftw_complex ***) kd_alloc2(sizeof(fftw_complex), 3, 3, 3, alloc_local);
 
     double ** chem = new double * [3];
@@ -782,6 +877,8 @@ int main(int argc, char ** argv)
 
             area_fraction = calc_area(eta, local_n0, N0, N1, ip.M1_norm);
             printf("%8d cepmax=%12.10f, Af=%12.10f\n",step,change_etap_max,area_fraction);
+
+            calc_dw(dw, w, local_n0, N1, ip.dx);
         }
 
         fp = fopen("area_fraction.dat", "a");
