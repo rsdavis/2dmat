@@ -280,7 +280,8 @@ void introduce_noise(double ** eta, ptrdiff_t local_n0, ptrdiff_t N1)
 
 void calc_chemical_potential(double ** chem, double ** eta, double *** sigeps, 
                              double ** epsbar, double **** sig0, double *** eps, 
-                             double ** lap, double * phi, ptrdiff_t local_n0, ptrdiff_t N1, struct input_parameters ip)
+                             double ** lap, double * phi, double ** dw, 
+                             ptrdiff_t local_n0, ptrdiff_t N1, struct input_parameters ip)
 {
 
     double EelAppl[3] = {0, 0, 0};
@@ -328,10 +329,10 @@ void calc_chemical_potential(double ** chem, double ** eta, double *** sigeps,
 
         // heterogenous, local strain part of free energy
         for (int p=0; p<3; p++)
-            f_hetero[p] = -2*eta[p][ndx]* ( sig0[p][0][0][ndx]*eps[0][0][ndx]
-                                          + sig0[p][0][1][ndx]*eps[0][1][ndx]
-                                          + sig0[p][1][0][ndx]*eps[1][0][ndx]
-                                          + sig0[p][1][1][ndx]*eps[1][1][ndx] );
+            f_hetero[p] = -2*eta[p][ndx]* ( sig0[p][0][0][ndx]*(eps[0][0][ndx] + dw[0][ndx]*dw[0][ndx])
+                                          + sig0[p][0][1][ndx]*(eps[0][1][ndx] + dw[0][ndx]*dw[1][ndx])
+                                          + sig0[p][1][0][ndx]*(eps[1][0][ndx] + dw[1][ndx]*dw[0][ndx])
+                                          + sig0[p][1][1][ndx]*(eps[1][1][ndx] + dw[1][ndx]*dw[1][ndx]) );
 
         for (int p=0; p<3; p++)
         {
@@ -343,7 +344,13 @@ void calc_chemical_potential(double ** chem, double ** eta, double *** sigeps,
 }
 
 
-void calc_uxy(double * ux, double * uy, fftw_complex ** ku, double *** G, double ** kxy, fftw_complex *** ks0n2, ptrdiff_t N0, ptrdiff_t N1, ptrdiff_t local_n0)
+///////////////////////////////////////////////////////////////////////////////////////////////
+void calc_uxy(double * ux, double * uy, fftw_complex ** ku, 
+              double *** G, double ** kxy, fftw_complex *** ks0n2, 
+              ptrdiff_t N0, ptrdiff_t N1, ptrdiff_t local_n0)
+// calculate the displacements in k-space and then inverse fourier tranform to real-space
+// F{u} = G*k*F{sig0*eta^2}
+//////////////////////////////////////////////////////////////////////////////////////////////
 {
     const int N1c = N1/2+1;
     for (int i=0; i<local_n0; i++)
@@ -370,17 +377,19 @@ void calc_uxy(double * ux, double * uy, fftw_complex ** ku, double *** G, double
     fftw_execute(planB_ux);
     fftw_execute(planB_uy);
 
+    // nomalize ux,uy - necessary after fftw
     normalize(ux, N0, N1, local_n0);
     normalize(uy, N0, N1, local_n0);
 }
 
 double update_eta(double ** eta, double ** eta_old, double ** eta_new, double ** chem, ptrdiff_t local_n0, ptrdiff_t N1, struct input_parameters ip)
 {
+    const int N1r = 2*(N1/2+1);
+
     double dtg = 0.5*ip.dt*ip.gamma;
     double dtg2 = 1.0/(1.0+dtg);
     double dta2 = ip.dt*ip.dt*ip.alpha*ip.alpha;
     double change_etap_max = 0;
-    const int N1r = 2*(N1/2+1);
 
     for (int p=0; p<3; p++)
     for (int i=0; i<local_n0; i++)
@@ -400,7 +409,35 @@ double update_eta(double ** eta, double ** eta_old, double ** eta_new, double **
     return change_etap_max;
 }
 
+void update_w(double * w, double * w_old, double * w_new, double * dFdw, ptrdiff_t local_n0, ptrdiff_t N1, struct input_parameters ip)
+{
+    const int N1r = 2*(N1/2+1);
+
+    double dtg = 0.5*ip.dt*ip.gamma;
+    double dtg2 = 1.0/(1.0+dtg);
+    double dta2 = ip.dt*ip.dt*ip.alpha*ip.alpha;
+
+    for (int i=0; i<local_n0; i++)
+    for (int j=0; j<N1; j++)
+    {
+        int ndx = i*N1r + j;
+
+        w_new[ndx] = dtg2*(2*w[ndx] - (dtg-1)*w_old[ndx] - dta2*dFdw[ndx]);
+
+        w_old[ndx] = w[ndx];
+        w[ndx] = w_new[ndx];
+    }
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void calc_ks0n2(double *** s0n2, double **** sig0, double ** eta, ptrdiff_t local_n0, ptrdiff_t N1)
+// calculate and transform the nonlinear terms in the displacement equation 
+// s0n2 = sig0_{jk}(p,r) * eta^2(p)
+// sig0 = the tranformation stresses - lambda * eps0
+// eta  = orientation order parameters
+// local_n0 = size of local process in x-direction
+// N1 = size of local process in y-direction
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
 {
     const int X = 0;
     const int Y = 1;
@@ -428,7 +465,12 @@ void calc_ks0n2(double *** s0n2, double **** sig0, double ** eta, ptrdiff_t loca
         fftw_execute(planF_s0n2[p][i]);
 }
 
-void calc_eps(double *** eps, fftw_complex ** keps, double ** kxy, fftw_complex ** ku, ptrdiff_t N0, ptrdiff_t N1, ptrdiff_t local_n0)
+////////////////////////////////////////////////////////////////////////////////////////////
+void calc_eps(double *** eps, fftw_complex ** keps, 
+              double ** kxy, fftw_complex ** ku, 
+              ptrdiff_t N0, ptrdiff_t N1, ptrdiff_t local_n0)
+// calculate the heterogeneous strain (delta-epsilon) in k-space and inverse tranform
+////////////////////////////////////////////////////////////////////////////////////////////
 {
     const int X = 0;
     const int Y = 1;
@@ -462,7 +504,12 @@ void calc_eps(double *** eps, fftw_complex ** keps, double ** kxy, fftw_complex 
     std::memcpy(eps[1][0], eps[0][1], sizeof(double)*local_n0*2*(N1/2+1));
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////
 void calc_lap(double ** lap, fftw_complex ** klap, fftw_complex ** keta, double ** kxy, ptrdiff_t N0, ptrdiff_t N1, ptrdiff_t local_n0)
+// calculate the laplacian of the eta order paramters in k-space and inverse transform
+// the laplacian comes from the gradient squared energy term
+// it will be used to calculate the eta parameter chemical potential
+////////////////////////////////////////////////////////////////////////////////////////////
 {
     const int X = 0;
     const int Y = 1;
@@ -532,9 +579,11 @@ std::string zeroFill(int x)
     return ss.str();
 }
 
-
-
-void interpolate(double * data, double m0, double m1, double * phi, ptrdiff_t local_n0, ptrdiff_t N1)
+////////////////////////////////////////////////////////////////////////////////////////////
+void interpolate(double * data, double m0, double m1, double * phi, 
+                 ptrdiff_t local_n0, ptrdiff_t N1)
+// iterpolate between values for the heterogenous composition
+////////////////////////////////////////////////////////////////////////////////////////////
 {
     const int N1r = 2*(N1/2 + 1);
 
@@ -564,6 +613,7 @@ double calc_area(double ** eta, ptrdiff_t local_n0, ptrdiff_t N0, ptrdiff_t N1, 
     return sum/(N0*N1);
 }
 
+/*
 void calc_dw(double ** dw, double * w, ptrdiff_t local_n0, ptrdiff_t N1, double dx)
 {
     const int N1r = 2*(N1/2+1);
@@ -611,49 +661,72 @@ void calc_dw(double ** dw, double * w, ptrdiff_t local_n0, ptrdiff_t N1, double 
     delete [] left;
     delete [] right;
 }
+*/
 
-void calc_dFdw(double * w, double ** dw, double **** lam, double *** eps, double ** epsbar, double *** s0n2, ptrdiff_t local_n0, ptrdiff_t N1)
+/*
+void calc_dFdw(double * dFdw, double * w, double ** dw, double **** lam, double *** eps, double ** epsbar, double *** s0n2, double ** kxy, ptrdiff_t local_n0, ptrdiff_t N0, ptrdiff_t N1, double kappa)
 {
     const int N1r = 2*(N1/2+1);
     const int N1c = N1/2 + 1;
 
-    double * dfdw1 = fftw_alloc_real(local_n0*N1r);
-    double * dfdw2 = fftw_alloc_real(local_n0*N1r);
-    fftw_complex * kdfdw1 = fftw_alloc_complex(local_n0*N1c);
-    fftw_complex * kdfdw2 = fftw_alloc_complex(local_n0*N1c);
+    const int X = 0;
+    const int Y = 1;
 
-    planF_eta[0] = fftw_mpi_plan_dft_r2c_2d(N0, N1, eta[0], keta[0], MPI_COMM_WORLD, FFTW_MEASURE);
+    double       *  temp    = fftw_alloc_real(local_n0*N1r);
+    fftw_complex *  ktemp   = fftw_alloc_complex(local_n0*N1c);
+    fftw_complex *  kdFdw   = fftw_alloc_complex(local_n0*N1c);
+    fftw_complex *  kw      = fftw_alloc_complex(local_n0*N1c);
 
-    fftw_plan fftw1 = fftw_mpi_plan_dft_r2c_2d(N0, N1, dfdw1, kdfdw1, MPI_COMM_WORLD, FFTW_ESTIMATE);
-    fftw_plan fftw2 = fftw_mpi_plan_dft_r2c_2d(N0, N1, dfdw2, kdfdw2, MPI_COMM_WORLD, FFTW_ESTIMATE);
+    fftw_plan planF_temp = fftw_mpi_plan_dft_r2c_2d(N0, N1, temp, ktemp, MPI_COMM_WORLD, FFTW_ESTIMATE);
+    fftw_plan planB_dFdw = fftw_mpi_plan_dft_c2r_2d(N0, N1, kdFdw, dFdw, MPI_COMM_WORLD, FFTW_ESTIMATE);
+    fftw_plan planF_w    = fftw_mpi_plan_dft_r2c_2d(N0, N1, w, kw, MPI_COMM_WORLD, FFTW_ESTIMATE);
 
     for (int i=0; i<local_n0; i++)
     for (int j=0; j<N1; j++)
     {
         int ndx = i*N1r + j;
-        double dfdw1 = 0;
-        double dfdw2 = 0;
+        temp[ndx] = 0;
 
         for (int ii=0; ii<2; ii++)
         for (int jj=0; jj<2; jj++)
-            dfdw1 += (epsbar[ii][jj] - s0n2[ii][jj][ndx])*dw[ii][ndx];
+            temp[ndx] += -(epsbar[ii][jj] - s0n2[ii][jj][ndx])*dw[ii][ndx];
 
         for (int ii=0; ii<2; ii++)
         for (int jj=0; jj<2; jj++)
         for (int kk=0; kk<2; kk++)
         for (int ll=0; ll<2; ll++)
-            dfdw2 += lam[ii][jj][kk][ll]*dw[ii][ndx]*(eps[ii][jj][ndx] + dw[jj][ndx]*dw[kk][ndx]);
+            temp[ndx] += -lam[ii][jj][kk][ll]*dw[ii][ndx]*(eps[ii][jj][ndx] + dw[jj][ndx]*dw[kk][ndx]);
     }
 
-    fftw_execute(fftw1);
-    fftw_execute(fftw2);
+    fftw_execute(planF_temp);
+    fftw_execute(planF_w);
 
-    fftw_free(dfdw1);
-    fftw_free(dfdw2);
-    fftw_free(kdfdw1);
-    fftw_free(kdfdw2);
+    for (int i=0; i<local_n0; i++)
+    for (int j=0; j<N1c; j++)
+    {
+        int ndx = i*N1c + j;
+        double k4x = kxy[X][ndx]*kxy[X][ndx]*kxy[X][ndx]*kxy[X][ndx];
+        double k4y = kxy[Y][ndx]*kxy[Y][ndx]*kxy[Y][ndx]*kxy[Y][ndx];
+
+        kdFdw[ndx][Re] =  (kxy[X][ndx]+kxy[Y][ndx])*ktemp[ndx][Im] + kappa*(k4x + k4y)*kw[ndx][Re];
+        kdFdw[ndx][Im] = -(kxy[X][ndx]+kxy[Y][ndx])*ktemp[ndx][Re] + kappa*(k4x + k4y)*kw[ndx][Im];
+    }
+
+    // kdFdw -> dFdw
+    fftw_execute(planB_dFdw); 
+
+    normalize(dFdw, N0, N1, local_n0);
+
+    fftw_free(temp);
+    fftw_free(ktemp);
+    fftw_free(kdFdw);
+    fftw_free(kw);
+
+    fftw_destroy_plan(planF_w);
+    fftw_destroy_plan(planF_temp);
+    fftw_destroy_plan(planB_dFdw);
 }
-
+*/
 
 int main(int argc, char ** argv)
 {
@@ -714,6 +787,14 @@ int main(int argc, char ** argv)
 
     ptrdiff_t alloc_local = fftw_mpi_local_size_2d(N0, N1/2+1, MPI_COMM_WORLD, &local_n0, &local_0_start);
 
+    double * ux;        // in-plane displacement in the x-direction     ux[ndx]
+    double * uy;        // in-plane displacement in the y-direction     uy[ndx]
+    double * phi;       // material composition                         phi[ndx]
+    double * lsf;       // level set function - used for initialization lsf[ndx]
+    double ** eta;      // orientation order parmater                   eta[p][ndx]
+    double ** eta_old;  // previous step order parmater                 eta[p][ndx]
+    double ** eta_new;  // next step order parmater                     eta[p][ndx]
+
     double **** lam;    // stiffness tensor         lam[i][j][k][l]
     double *** G;       // greens functions         G[i][j][ndx]
     double ** kxy;      // fourier k-vectors        kxy[i][ndx] 
@@ -724,41 +805,50 @@ int main(int argc, char ** argv)
     double ** epsbar;   // homogeneous strain       epsbar[i][j]
     double *** eps;     // heterogeneous strain     eps[p][i][j][ndx]
     double *** s0n2;    // sig0*eta                 s0n2[i][j][ndx]
+    double ** chem;     // chemical potential       chem[p][ndx]
     double * w;         // out-of-plane bending     w[ndx]
     double ** dw;       // dw/dx, dw/dy             dw[i][ndx]
-
+    double * dFdw;      // delta F / delta w        dFdw[ndx]                    
+    double * w_old;
+    double * w_new;
     fftw_complex *** ks0n2; // fourier transform of s0n2, ks0n2[p][j+k][ndx]
 
+    // allocate all of the memory needed for the simulation
+
     lam     = (double ****) kd_alloc2(sizeof(double), 4, 2, 2, 2, 2);
-    G       = (double ***) kd_alloc2(sizeof(double), 3, 2, 2, alloc_local);
-    kxy     = (double **) kd_alloc2(sizeof(double), 2, 2, alloc_local);
+    G       = (double ***)  kd_alloc2(sizeof(double), 3, 2, 2, alloc_local);
+    kxy     = (double **)   kd_alloc2(sizeof(double), 2, 2, alloc_local);
     epsT    = (double ****) kd_alloc2(sizeof(double), 4, 2, 3, 2, 2);
     eps0    = (double ****) kd_alloc2(sizeof(double), 4, 3, 2, 2, 2*alloc_local);
     sig0    = (double ****) kd_alloc2(sizeof(double), 4, 3, 2, 2, 2*alloc_local);
-    sigeps  = (double ***) kd_alloc2(sizeof(double), 3, 3, 3, 2*alloc_local);
-    epsbar  = (double **) kd_alloc2(sizeof(double), 2, 2, 2);
-    eps     = (double ***) kd_alloc2(sizeof(double), 3, 2, 2, 2*alloc_local);
-    s0n2    = (double ***) kd_alloc2(sizeof(double), 3, 3, 3, 2*alloc_local);
-    w       = fftw_alloc_real(2*alloc_local);
-    dw      = (double **) kd_alloc2(sizeof(double), 2, 2, 2*alloc_local);
+    sigeps  = (double ***)  kd_alloc2(sizeof(double), 3, 3, 3, 2*alloc_local);
+    epsbar  = (double **)   kd_alloc2(sizeof(double), 2, 2, 2);
+    eps     = (double ***)  kd_alloc2(sizeof(double), 3, 2, 2, 2*alloc_local);
+    s0n2    = (double ***)  kd_alloc2(sizeof(double), 3, 3, 3, 2*alloc_local);
     ks0n2   = (fftw_complex ***) kd_alloc2(sizeof(fftw_complex), 3, 3, 3, alloc_local);
 
-    double ** chem = new double * [3];
+    w       = fftw_alloc_real(2*alloc_local);
+    w_old   = fftw_alloc_real(2*alloc_local);
+    w_new   = fftw_alloc_real(2*alloc_local);
+    dFdw    = fftw_alloc_real(2*alloc_local);
+    dw      = (double **) kd_alloc2(sizeof(double), 2, 2, 2*alloc_local);
+
+    chem = new double * [3];
     chem[0] = fftw_alloc_real(2*alloc_local);
     chem[1] = fftw_alloc_real(2*alloc_local);
     chem[2] = fftw_alloc_real(2*alloc_local);
 
-    double ** eta = new double * [3];
+    eta = new double * [3];
     eta[0] = fftw_alloc_real(2*alloc_local);
     eta[1] = fftw_alloc_real(2*alloc_local);
     eta[2] = fftw_alloc_real(2*alloc_local);
 
-    double ** eta_old = new double * [3];
+    eta_old = new double * [3];
     eta_old[0] = fftw_alloc_real(2*alloc_local);
     eta_old[1] = fftw_alloc_real(2*alloc_local);
     eta_old[2] = fftw_alloc_real(2*alloc_local);
 
-    double ** eta_new = new double * [3];
+    eta_new = new double * [3];
     eta_new[0] = fftw_alloc_real(2*alloc_local);
     eta_new[1] = fftw_alloc_real(2*alloc_local);
     eta_new[2] = fftw_alloc_real(2*alloc_local);
@@ -788,14 +878,17 @@ int main(int argc, char ** argv)
     keps[1] = fftw_alloc_complex(alloc_local);
     keps[2] = fftw_alloc_complex(alloc_local);
 
-    double * ux = fftw_alloc_real(2*alloc_local);
-    double * uy = fftw_alloc_real(2*alloc_local);
-    double * phi = fftw_alloc_real(2*alloc_local);
-    double * lsf = fftw_alloc_real(local_n0*N1);
+    ux = fftw_alloc_real(2*alloc_local);
+    uy = fftw_alloc_real(2*alloc_local);
+    phi = fftw_alloc_real(2*alloc_local);
+    lsf = fftw_alloc_real(local_n0*N1);
 
     fftw_complex ** ku = new fftw_complex * [2];
     ku[0] = fftw_alloc_complex(alloc_local);
     ku[1] = fftw_alloc_complex(alloc_local);
+
+
+    // initialize the necessary fourier transforms
 
     planF_eta[0] = fftw_mpi_plan_dft_r2c_2d(N0, N1, eta[0], keta[0], MPI_COMM_WORLD, FFTW_MEASURE);
     planF_eta[1] = fftw_mpi_plan_dft_r2c_2d(N0, N1, eta[1], keta[1], MPI_COMM_WORLD, FFTW_MEASURE);
@@ -816,8 +909,13 @@ int main(int argc, char ** argv)
     plan_strain_yy = fftw_mpi_plan_dft_c2r_2d(N0, N1, keps[1], eps[1][1], MPI_COMM_WORLD, FFTW_MEASURE);
     plan_strain_xy = fftw_mpi_plan_dft_c2r_2d(N0, N1, keps[2], eps[0][1], MPI_COMM_WORLD, FFTW_MEASURE);
 
+
+    // calculate the elastic parameters
+
     calc_greens_function(G, kxy, local_n0, local_0_start, N1, ip);
     calc_transformation_strains(epsT, ip);
+
+    // initialize the system with in-plane heterogeneity
 
     initialize_lsf_circle(lsf, local_n0, local_0_start, N1);
     //initialize_lsf_stripe(lsf, local_n0, local_0_start, N1);
@@ -835,10 +933,13 @@ int main(int argc, char ** argv)
     log_greens_function(G, kxy, local_n0, N1);
     log_elastic_tensors(lam, epsT);
 
+    // initialize eta parameters to zero
     initialize(eta, eta_old, local_n0, N1);
 
-    for (int i=0; i<2*alloc_local; i++) { ux[i] = 0; uy[i] = 0; }
+    // initialize displacements to zero
+    for (int i=0; i<2*alloc_local; i++) { ux[i]=0; uy[i]=0; w_old[i]=0; w[i]=0; }
 
+    // begin writing the output file
     H5File h5;
     h5.open("out.h5", "w");
     output("phi", phi, N0, N1, local_n0);
@@ -847,54 +948,77 @@ int main(int argc, char ** argv)
     FILE * fp = fopen("area_fraction.dat", "w");
     fclose(fp);
 
+    
+    // begin the simulation loop
     int frame = 0;
     for (int step=1; step<=ip.nsteps; step++)
     {
+        // increase load on system
         epsbar[0][0] = ip.epsx * (step/(double)ip.nsteps);
         epsbar[1][1] = ip.epsy * (step/(double)ip.nsteps);
         epsbar[0][1] = 0;
         epsbar[1][0] = 0;
 
+        // iterative relaxation loop for eta_p parameters
         double change_etap_max = 1;
         double area_fraction;
         while (change_etap_max > ip.change_etap_thresh)
         {
             change_etap_max = 0;
 
+            // fourier transform the nonlinear term in displacement equation sig0_{jk}*eta_p^2
             calc_ks0n2(s0n2, sig0, eta, local_n0, N1);
+
+            // calculate the displacement in k-space using greens function
             calc_uxy(ux, uy, ku, G, kxy, ks0n2, N0, N1, local_n0);
 
+            // calculate the heterogeneous strain (delta-epsilon) in k-space
             calc_eps(eps, keps, kxy, ku, N0, N1, local_n0);
 
+            // introduce random noise into the eta parameters
             introduce_noise(eta, local_n0, N1);
+
+            // calculate the laplacian of the eta parameters (for the gradient squared energy term)
             calc_lap(lap, klap, keta, kxy, N0, N1, local_n0);
 
-            calc_chemical_potential(chem, eta, sigeps, epsbar, sig0, eps, lap, phi, local_n0, N1, ip);
+            // calculate the chemical potential for the eta parameters 
+            calc_chemical_potential(chem, eta, sigeps, epsbar, sig0, eps, lap, phi, dw, local_n0, N1, ip);
 
+            // step the eta parameters in time using the evolution wave equation
             change_etap_max = update_eta(eta, eta_old, eta_new, chem, local_n0, N1, ip);
 
+            // share convergence info with all processes for parallel computation
             MPI_Allreduce(MPI_IN_PLACE, &change_etap_max, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
 
+            // the rest for out-of-plance displacements - in progress
+
+            // calculate first derivatives of the out-of-plane displacement
+            //calc_dw(dw, w, local_n0, N1, ip.dx);
+
+            // calculate the chemical potential of out-of-plane displacement
+            //calc_dFdw(dFdw, w, dw, lam, eps, epsbar, s0n2, kxy, local_n0, N0, N1, ip.kappa);
+
+            // step w in time using evolution wave equation
+            //update_w(w, w_old, w_new, dFdw, local_n0, N1, ip);
+
+            // calculate and output area - will change in future versions
             area_fraction = calc_area(eta, local_n0, N0, N1, ip.M1_norm);
             printf("%8d cepmax=%12.10f, Af=%12.10f\n",step,change_etap_max,area_fraction);
-
-            calc_dw(dw, w, local_n0, N1, ip.dx);
         }
+
+        // eta_p parameters have reached a thermodynamic and mechanical equilibrium
 
         fp = fopen("area_fraction.dat", "a");
         fprintf(fp, "%10d %12.10f\n", step, area_fraction);
         fclose(fp);
 
+        // output eta_p data
         if (step % ip.out_freq == 0) {
             frame++;
             output("eta0/"+zeroFill(frame), eta[0], N0, N1, local_n0);
             output("eta1/"+zeroFill(frame), eta[1], N0, N1, local_n0);
             output("eta2/"+zeroFill(frame), eta[2], N0, N1, local_n0);
-            output("eps_xx/"+zeroFill(frame), eps[0][0], N0, N1, local_n0);
-            output("eps_yy/"+zeroFill(frame), eps[1][1], N0, N1, local_n0);
-            output("eps_xy/"+zeroFill(frame), eps[0][1], N0, N1, local_n0);
-            output("ux/"+zeroFill(frame), ux, N0, N1, local_n0);
-            output("uy/"+zeroFill(frame), uy, N0, N1, local_n0);
+            output("w/"+zeroFill(frame), w, N0, N1, local_n0);
         }
     }
 
