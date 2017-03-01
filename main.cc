@@ -409,25 +409,7 @@ double update_eta(double ** eta, double ** eta_old, double ** eta_new, double **
     return change_etap_max;
 }
 
-void update_w(double * w, double * w_old, double * w_new, double * dFdw, ptrdiff_t local_n0, ptrdiff_t N1, struct input_parameters ip)
-{
-    const int N1r = 2*(N1/2+1);
 
-    double dtg = 0.5*ip.dt*ip.gamma;
-    double dtg2 = 1.0/(1.0+dtg);
-    double dta2 = ip.dt*ip.dt*ip.alpha*ip.alpha;
-
-    for (int i=0; i<local_n0; i++)
-    for (int j=0; j<N1; j++)
-    {
-        int ndx = i*N1r + j;
-
-        w_new[ndx] = dtg2*(2*w[ndx] - (dtg-1)*w_old[ndx] - dta2*dFdw[ndx]);
-
-        w_old[ndx] = w[ndx];
-        w[ndx] = w_new[ndx];
-    }
-}
 
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////
 void calc_ks0n2(double *** s0n2, double **** sig0, double ** eta, ptrdiff_t local_n0, ptrdiff_t N1)
@@ -613,13 +595,20 @@ double calc_area(double ** eta, ptrdiff_t local_n0, ptrdiff_t N0, ptrdiff_t N1, 
     return sum/(N0*N1);
 }
 
-/*
+///////////////////////////////////////////////////////////////////////////////////////////////
 void calc_dw(double ** dw, double * w, ptrdiff_t local_n0, ptrdiff_t N1, double dx)
+// calculate the derivatives of the out-of-plane displacement
+// dw[i][ndx] is the first derivative of the out-of-plane displacement (w) in the direction "i = (X,Y)" at grid location "ndx"
+// local_n0 is the size of the local process in the x direction
+// N1 is the size of the local process in the y direction
+// dx is the grid spacing
+///////////////////////////////////////////////////////////////////////////////////////////////
 {
     const int N1r = 2*(N1/2+1);
     const int X = 0;
     const int Y = 1;
 
+    // first communicate edge data for parallel processes using MPI
     double * left   = new double [(int)N1];
     double * right  = new double [(int)N1];
     MPI_Request request;
@@ -644,6 +633,8 @@ void calc_dw(double ** dw, double * w, ptrdiff_t local_n0, ptrdiff_t N1, double 
     MPI_Isend(w, count, MPI_DOUBLE, dest, tag, MPI_COMM_WORLD, &request);
     MPI_Recv(right, count, MPI_DOUBLE, source, tag, MPI_COMM_WORLD, &status);
 
+    // loop through the local grid and calculate first derivatives
+
     for (int i=0; i<local_n0; i++)
     for (int j=0; j<N1; j++)
     {
@@ -661,10 +652,22 @@ void calc_dw(double ** dw, double * w, ptrdiff_t local_n0, ptrdiff_t N1, double 
     delete [] left;
     delete [] right;
 }
-*/
 
-/*
-void calc_dFdw(double * dFdw, double * w, double ** dw, double **** lam, double *** eps, double ** epsbar, double *** s0n2, double ** kxy, ptrdiff_t local_n0, ptrdiff_t N0, ptrdiff_t N1, double kappa)
+///////////////////////////////////////////////////////////////////////////////////////////////
+void calc_dFdw(double * dFdw, double * w, double ** dw, 
+               double **** lam, double *** eps, double ** epsbar, double *** s0n2, double ** kxy, 
+               ptrdiff_t local_n0, ptrdiff_t N0, ptrdiff_t N1, double kappa)
+// Calculate the chemical potentail of the out-of-plane displacement that will be used for evolution
+
+// dFdw[ndx] is the variational derivative (chemical potential) of the out-of-plane displacement
+// w[ndx], dw[i][ndx] are the out-of-plane displacements and its first derivatives
+// lam[i][j][k][l] is the elastic stiffness tensor (lambda)
+// eps[i][j][ndx] is the heterogeneous strain 0.5(u_{ij} + u_{ji})
+// epsbar[i][ndx] is the homogeneous strain on the system
+// s0n2[i][j][ndx] is the product sig0(p,r) * eta(p) 
+// kxy[i][ndx] are the k-vectors for calculating derivatives in k-space
+// kappa is the bending modulus
+///////////////////////////////////////////////////////////////////////////////////////////////
 {
     const int N1r = 2*(N1/2+1);
     const int N1c = N1/2 + 1;
@@ -672,15 +675,18 @@ void calc_dFdw(double * dFdw, double * w, double ** dw, double **** lam, double 
     const int X = 0;
     const int Y = 1;
 
+    // allocate temporary memory
     double       *  temp    = fftw_alloc_real(local_n0*N1r);
     fftw_complex *  ktemp   = fftw_alloc_complex(local_n0*N1c);
     fftw_complex *  kdFdw   = fftw_alloc_complex(local_n0*N1c);
     fftw_complex *  kw      = fftw_alloc_complex(local_n0*N1c);
 
+    // initialize fast fourier transforms
     fftw_plan planF_temp = fftw_mpi_plan_dft_r2c_2d(N0, N1, temp, ktemp, MPI_COMM_WORLD, FFTW_ESTIMATE);
     fftw_plan planB_dFdw = fftw_mpi_plan_dft_c2r_2d(N0, N1, kdFdw, dFdw, MPI_COMM_WORLD, FFTW_ESTIMATE);
     fftw_plan planF_w    = fftw_mpi_plan_dft_r2c_2d(N0, N1, w, kw, MPI_COMM_WORLD, FFTW_ESTIMATE);
 
+    // do some of the calculations in real space before taking derivatives
     for (int i=0; i<local_n0; i++)
     for (int j=0; j<N1; j++)
     {
@@ -698,9 +704,11 @@ void calc_dFdw(double * dFdw, double * w, double ** dw, double **** lam, double 
             temp[ndx] += -lam[ii][jj][kk][ll]*dw[ii][ndx]*(eps[ii][jj][ndx] + dw[jj][ndx]*dw[kk][ndx]);
     }
 
+    // forward tranform to k-space
     fftw_execute(planF_temp);
     fftw_execute(planF_w);
 
+    // calculate the derivatives in k-space
     for (int i=0; i<local_n0; i++)
     for (int j=0; j<N1c; j++)
     {
@@ -712,11 +720,12 @@ void calc_dFdw(double * dFdw, double * w, double ** dw, double **** lam, double 
         kdFdw[ndx][Im] = -(kxy[X][ndx]+kxy[Y][ndx])*ktemp[ndx][Re] + kappa*(k4x + k4y)*kw[ndx][Im];
     }
 
-    // kdFdw -> dFdw
+    // inverse fourier transform kdFdw -> dFdw
     fftw_execute(planB_dFdw); 
 
     normalize(dFdw, N0, N1, local_n0);
 
+    // free memory
     fftw_free(temp);
     fftw_free(ktemp);
     fftw_free(kdFdw);
@@ -726,7 +735,29 @@ void calc_dFdw(double * dFdw, double * w, double ** dw, double **** lam, double 
     fftw_destroy_plan(planF_temp);
     fftw_destroy_plan(planB_dFdw);
 }
-*/
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+void update_w(double * w, double * w_old, double * w_new, double * dFdw, ptrdiff_t local_n0, ptrdiff_t N1, struct input_parameters ip)
+// step the out-of-plane displacement in time using the evolution wave equation
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////
+{
+    const int N1r = 2*(N1/2+1);
+
+    double dtg = 0.5*ip.dt*ip.gamma;
+    double dtg2 = 1.0/(1.0+dtg);
+    double dta2 = ip.dt*ip.dt*ip.alpha*ip.alpha;
+
+    for (int i=0; i<local_n0; i++)
+    for (int j=0; j<N1; j++)
+    {
+        int ndx = i*N1r + j;
+
+        w_new[ndx] = dtg2*(2*w[ndx] - (dtg-1)*w_old[ndx] - dta2*dFdw[ndx]);
+
+        w_old[ndx] = w[ndx];
+        w[ndx] = w_new[ndx];
+    }
+}
 
 int main(int argc, char ** argv)
 {
@@ -990,7 +1021,7 @@ int main(int argc, char ** argv)
             // share convergence info with all processes for parallel computation
             MPI_Allreduce(MPI_IN_PLACE, &change_etap_max, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
 
-            // the rest for out-of-plance displacements - in progress
+            // the rest for out-of-plane displacements - in progress
 
             // calculate first derivatives of the out-of-plane displacement
             //calc_dw(dw, w, local_n0, N1, ip.dx);
