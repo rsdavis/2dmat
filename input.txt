@@ -7,8 +7,8 @@ dt = 0.5
 nsteps   = 1000
 out_freq = 50
 
-epsx =  0.06
-epsy = -0.06
+epsx =  0.02
+epsy =  0.06
 
 beta = 0.002 
 Mn = 1.0 

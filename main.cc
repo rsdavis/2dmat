@@ -382,6 +382,71 @@ void calc_uxy(double * ux, double * uy, fftw_complex ** ku,
     normalize(uy, N0, N1, local_n0);
 }
 
+void calc_uxy_bending(double * ux, double * uy, fftw_complex ** ku, double ** dw, double ** ddw,
+                      double **** lam, double *** G, double ** kxy, fftw_complex *** ks0n2,
+                      ptrdiff_t N0, ptrdiff_t N1, ptrdiff_t local_n0)
+{
+    const int N1c = N1/2+1;
+    const int N1r = 2*(N1/2+1);
+
+    double * N_klm = fftw_alloc_real(local_n0*N1r);
+    fftw_complex * kN_klm = fftw_alloc_complex(local_n0*N1c);
+    fftw_plan planF_N = fftw_mpi_plan_dft_r2c_2d(N0, N1, N_klm, kN_klm, MPI_COMM_WORLD, FFTW_ESTIMATE);
+
+    for (int i=0; i<local_n0; i++)
+    for (int j=0; j<N1c; j++)
+    {
+        int ndx = i*N1c + j;
+
+        for (int ii=0; ii<2; ii++)
+        {
+            ku[ii][ndx][Re] = 0;
+            ku[ii][ndx][Im] = 0;
+
+            for (int pp=0; pp<3; pp++)
+            for (int jj=0; jj<2; jj++)
+            for (int kk=0; kk<2; kk++)
+            {
+                ku[ii][ndx][Re] += G[ii][jj][ndx]*kxy[kk][ndx]*ks0n2[pp][jj+kk][ndx][Im];
+                ku[ii][ndx][Im] -= G[ii][jj][ndx]*kxy[kk][ndx]*ks0n2[pp][jj+kk][ndx][Re];
+            }
+        }
+    }
+
+    for (int kk=0; kk<2; kk++)
+    for (int ll=0; ll<2; ll++)
+    for (int mm=0; mm<2; mm++)
+    {
+        for (int i=0; i<local_n0; i++)
+        for (int j=0; j<N1r; j++)
+        {
+            int ndx = i*N1r + j;
+            N_klm[ndx] = dw[kk][ndx] * ddw[ll+mm][ndx];
+        }
+
+        fftw_execute(planF_N);
+
+        for (int i=0; i<local_n0; i++)
+        for (int j=0; j<N1c; j++)
+        {
+            int ndx = i*N1c + j;
+
+            for (int ii=0; ii<2; ii++)
+            for (int jj=0; jj<2; jj++)
+            {
+                ku[ii][ndx][Re] += G[ii][jj][ndx]*lam[jj][kk][ll][mm]*kN_klm[ndx][Re];
+                ku[ii][ndx][Im] += G[ii][jj][ndx]*lam[jj][kk][ll][mm]*kN_klm[ndx][Im];
+            }
+        }
+    }
+
+    fftw_execute(planB_ux);
+    fftw_execute(planB_uy);
+
+    normalize(ux, N0, N1, local_n0);
+    normalize(uy, N0, N1, local_n0);
+}
+
 double update_eta(double ** eta, double ** eta_old, double ** eta_new, double ** chem, ptrdiff_t local_n0, ptrdiff_t N1, struct input_parameters ip)
 {
     const int N1r = 2*(N1/2+1);
@@ -595,6 +660,7 @@ double calc_area(double ** eta, ptrdiff_t local_n0, ptrdiff_t N0, ptrdiff_t N1, 
     return sum/(N0*N1);
 }
 
+/*
 ///////////////////////////////////////////////////////////////////////////////////////////////
 void calc_dw(double ** dw, double * w, ptrdiff_t local_n0, ptrdiff_t N1, double dx)
 // calculate the derivatives of the out-of-plane displacement
@@ -652,6 +718,94 @@ void calc_dw(double ** dw, double * w, ptrdiff_t local_n0, ptrdiff_t N1, double 
     delete [] left;
     delete [] right;
 }
+*/
+
+double max ( double * data, int local_n0, int N1 )
+{
+    double m = 0;
+    for (int i=0; i<local_n0; i++)
+    for (int j=0; j<N1; j++)
+    {
+        int ndx = i*2*(N1/2+1) + j;
+        if (fabs(data[ndx]) > m) m = fabs(data[ndx]);
+    }
+    return m;
+}
+
+void calc_dw(double * w, double ** dw, double ** ddw, double ** kxy, ptrdiff_t N0, ptrdiff_t N1, ptrdiff_t local_n0)
+{
+    const int X = 0;
+    const int Y = 1;
+    const int XX = 0;
+    const int XY = 1;
+    const int YY = 2;
+
+    const int N1c = N1/2+1;
+
+    fftw_complex * kw = fftw_alloc_complex(local_n0*N1c);
+    fftw_complex * kdwx = fftw_alloc_complex(local_n0*N1c);
+    fftw_complex * kdwy = fftw_alloc_complex(local_n0*N1c);
+    fftw_complex * kddwxx = fftw_alloc_complex(local_n0*N1c);
+    fftw_complex * kddwxy = fftw_alloc_complex(local_n0*N1c);
+    fftw_complex * kddwyy = fftw_alloc_complex(local_n0*N1c);
+
+    fftw_plan planF_w = fftw_mpi_plan_dft_r2c_2d(N0, N1, w, kw, MPI_COMM_WORLD, FFTW_ESTIMATE);
+    fftw_plan planB_kdwx = fftw_mpi_plan_dft_c2r_2d(N0, N1, kdwx, dw[X], MPI_COMM_WORLD, FFTW_ESTIMATE);
+    fftw_plan planB_kdwy = fftw_mpi_plan_dft_c2r_2d(N0, N1, kdwy, dw[Y], MPI_COMM_WORLD, FFTW_ESTIMATE);
+    fftw_plan planB_kddwxx = fftw_mpi_plan_dft_c2r_2d(N0, N1, kddwxx, ddw[XX], MPI_COMM_WORLD, FFTW_ESTIMATE);
+    fftw_plan planB_kddwxy = fftw_mpi_plan_dft_c2r_2d(N0, N1, kddwxy, ddw[XY], MPI_COMM_WORLD, FFTW_ESTIMATE);
+    fftw_plan planB_kddwyy = fftw_mpi_plan_dft_c2r_2d(N0, N1, kddwyy, ddw[YY], MPI_COMM_WORLD, FFTW_ESTIMATE);
+
+    fftw_execute(planF_w);
+
+    for (int i=0; i<local_n0; i++)
+    for (int j=0; j<N1c; j++)
+    {
+        int ndx = i*N1c + j;
+
+        kdwx[ndx][Re] = -kxy[X][ndx] * kw[ndx][Im];
+        kdwx[ndx][Im] =  kxy[X][ndx] * kw[ndx][Re];
+
+        kdwy[ndx][Re] = -kxy[Y][ndx] * kw[ndx][Im];
+        kdwy[ndx][Im] =  kxy[Y][ndx] * kw[ndx][Re];
+
+        kddwxx[ndx][Re] = -kxy[X][ndx]*kxy[X][ndx] * kw[ndx][Re];
+        kddwxx[ndx][Im] = -kxy[X][ndx]*kxy[X][ndx] * kw[ndx][Im];
+ 
+        kddwyy[ndx][Re] = -kxy[Y][ndx]*kxy[Y][ndx] * kw[ndx][Re];
+        kddwyy[ndx][Im] = -kxy[Y][ndx]*kxy[Y][ndx] * kw[ndx][Im];
+
+        kddwxy[ndx][Re] = -kxy[X][ndx]*kxy[Y][ndx] * kw[ndx][Re];
+        kddwxy[ndx][Im] = -kxy[X][ndx]*kxy[Y][ndx] * kw[ndx][Im];
+    }
+
+    fftw_execute(planB_kdwx);
+    fftw_execute(planB_kdwy);
+    fftw_execute(planB_kddwxx);
+    fftw_execute(planB_kddwxy);
+    fftw_execute(planB_kddwyy);
+
+    normalize(dw[X], N0, N1, local_n0);
+    normalize(dw[Y], N0, N1, local_n0);
+    normalize(ddw[XX], N0, N1, local_n0);
+    normalize(ddw[XY], N0, N1, local_n0);
+    normalize(ddw[YY], N0, N1, local_n0);
+
+    fftw_destroy_plan(planF_w);
+    fftw_destroy_plan(planB_kdwx);
+    fftw_destroy_plan(planB_kdwy);
+    fftw_destroy_plan(planB_kddwxx);
+    fftw_destroy_plan(planB_kddwxy);
+    fftw_destroy_plan(planB_kddwyy);
+
+    fftw_free(kw);
+    fftw_free(kdwx);
+    fftw_free(kdwy);
+    fftw_free(kddwxx);
+    fftw_free(kddwxy);
+    fftw_free(kddwyy);
+}
+
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
 void calc_dFdw(double * dFdw, double * w, double ** dw, 
@@ -664,48 +818,61 @@ void calc_dFdw(double * dFdw, double * w, double ** dw,
 // lam[i][j][k][l] is the elastic stiffness tensor (lambda)
 // eps[i][j][ndx] is the heterogeneous strain 0.5(u_{ij} + u_{ji})
 // epsbar[i][ndx] is the homogeneous strain on the system
-// s0n2[i][j][ndx] is the product sig0(p,r) * eta(p) 
+// s0n2[p][ij][ndx] is the product sig0(p,r) * eta(p) 
 // kxy[i][ndx] are the k-vectors for calculating derivatives in k-space
 // kappa is the bending modulus
 ///////////////////////////////////////////////////////////////////////////////////////////////
 {
-    const int N1r = 2*(N1/2+1);
     const int N1c = N1/2 + 1;
+    const int N1r = 2*(N1/2+1);
 
     const int X = 0;
     const int Y = 1;
 
     // allocate temporary memory
-    double       *  temp    = fftw_alloc_real(local_n0*N1r);
-    fftw_complex *  ktemp   = fftw_alloc_complex(local_n0*N1c);
-    fftw_complex *  kdFdw   = fftw_alloc_complex(local_n0*N1c);
-    fftw_complex *  kw      = fftw_alloc_complex(local_n0*N1c);
+    double * temp0 = fftw_alloc_real(local_n0*N1r);
+    double * temp1 = fftw_alloc_real(local_n0*N1r);
+
+    fftw_complex * ktemp0 = fftw_alloc_complex(local_n0*N1c);
+    fftw_complex * ktemp1 = fftw_alloc_complex(local_n0*N1c);
+
+    fftw_complex * kdFdw  = fftw_alloc_complex(local_n0*N1c);
+    fftw_complex * kw     = fftw_alloc_complex(local_n0*N1c);
 
     // initialize fast fourier transforms
-    fftw_plan planF_temp = fftw_mpi_plan_dft_r2c_2d(N0, N1, temp, ktemp, MPI_COMM_WORLD, FFTW_ESTIMATE);
-    fftw_plan planB_dFdw = fftw_mpi_plan_dft_c2r_2d(N0, N1, kdFdw, dFdw, MPI_COMM_WORLD, FFTW_ESTIMATE);
+
+    fftw_plan planF_temp0 = fftw_mpi_plan_dft_r2c_2d(N0, N1, temp0, ktemp0, MPI_COMM_WORLD, FFTW_ESTIMATE);
+    fftw_plan planF_temp1 = fftw_mpi_plan_dft_r2c_2d(N0, N1, temp1, ktemp1, MPI_COMM_WORLD, FFTW_ESTIMATE);
     fftw_plan planF_w    = fftw_mpi_plan_dft_r2c_2d(N0, N1, w, kw, MPI_COMM_WORLD, FFTW_ESTIMATE);
+
+    fftw_plan planB_dFdw = fftw_mpi_plan_dft_c2r_2d(N0, N1, kdFdw, dFdw, MPI_COMM_WORLD, FFTW_ESTIMATE);
 
     // do some of the calculations in real space before taking derivatives
     for (int i=0; i<local_n0; i++)
     for (int j=0; j<N1; j++)
     {
         int ndx = i*N1r + j;
-        temp[ndx] = 0;
+        temp0[ndx] = 0;
+        temp1[ndx] = 0;
 
         for (int ii=0; ii<2; ii++)
-        for (int jj=0; jj<2; jj++)
-            temp[ndx] += -(epsbar[ii][jj] - s0n2[ii][jj][ndx])*dw[ii][ndx];
+        {
+            temp0[ndx] += (epsbar[ii][0] - s0n2[0][ii+0][ndx] - s0n2[1][ii+0][ndx] - s0n2[2][ii+0][ndx])*dw[ii][ndx];
+            temp1[ndx] += (epsbar[ii][1] - s0n2[0][ii+1][ndx] - s0n2[1][ii+1][ndx] - s0n2[2][ii+1][ndx])*dw[ii][ndx];
+        }
 
         for (int ii=0; ii<2; ii++)
-        for (int jj=0; jj<2; jj++)
         for (int kk=0; kk<2; kk++)
         for (int ll=0; ll<2; ll++)
-            temp[ndx] += -lam[ii][jj][kk][ll]*dw[ii][ndx]*(eps[ii][jj][ndx] + dw[jj][ndx]*dw[kk][ndx]);
+        {
+            temp0[ndx] += lam[ii][0][kk][ll]*dw[ii][ndx]*(eps[ii][0][ndx] + 0.5*dw[kk][ndx]*dw[ll][ndx]);
+            temp1[ndx] += lam[ii][1][kk][ll]*dw[ii][ndx]*(eps[ii][1][ndx] + 0.5*dw[kk][ndx]*dw[ll][ndx]);
+        }
     }
 
     // forward tranform to k-space
-    fftw_execute(planF_temp);
+    fftw_execute(planF_temp0);
+    fftw_execute(planF_temp1);
     fftw_execute(planF_w);
 
     // calculate the derivatives in k-space
@@ -716,8 +883,8 @@ void calc_dFdw(double * dFdw, double * w, double ** dw,
         double k4x = kxy[X][ndx]*kxy[X][ndx]*kxy[X][ndx]*kxy[X][ndx];
         double k4y = kxy[Y][ndx]*kxy[Y][ndx]*kxy[Y][ndx]*kxy[Y][ndx];
 
-        kdFdw[ndx][Re] =  (kxy[X][ndx]+kxy[Y][ndx])*ktemp[ndx][Im] + kappa*(k4x + k4y)*kw[ndx][Re];
-        kdFdw[ndx][Im] = -(kxy[X][ndx]+kxy[Y][ndx])*ktemp[ndx][Re] + kappa*(k4x + k4y)*kw[ndx][Im];
+        kdFdw[ndx][Re] =  kxy[X][ndx]*ktemp0[ndx][Im] + kxy[Y][ndx]*ktemp1[ndx][Im] + kappa*(k4x + k4y)*kw[ndx][Re];
+        kdFdw[ndx][Im] = -kxy[X][ndx]*ktemp0[ndx][Re] - kxy[Y][ndx]*ktemp1[ndx][Re] + kappa*(k4x + k4y)*kw[ndx][Im];
     }
 
     // inverse fourier transform kdFdw -> dFdw
@@ -726,13 +893,16 @@ void calc_dFdw(double * dFdw, double * w, double ** dw,
     normalize(dFdw, N0, N1, local_n0);
 
     // free memory
-    fftw_free(temp);
-    fftw_free(ktemp);
+    fftw_free(temp0);
+    fftw_free(temp1);
+    fftw_free(ktemp0);
+    fftw_free(ktemp1);
     fftw_free(kdFdw);
     fftw_free(kw);
 
     fftw_destroy_plan(planF_w);
-    fftw_destroy_plan(planF_temp);
+    fftw_destroy_plan(planF_temp0);
+    fftw_destroy_plan(planF_temp1);
     fftw_destroy_plan(planB_dFdw);
 }
 
@@ -742,20 +912,36 @@ void update_w(double * w, double * w_old, double * w_new, double * dFdw, ptrdiff
 //////////////////////////////////////////////////////////////////////////////////////////////////////////////
 {
     const int N1r = 2*(N1/2+1);
+    double dtw = ip.dt/20.0;
 
-    double dtg = 0.5*ip.dt*ip.gamma;
+    double dtg = 0.5*dtw*ip.gamma;
     double dtg2 = 1.0/(1.0+dtg);
-    double dta2 = ip.dt*ip.dt*ip.alpha*ip.alpha;
+    double dta2 = dtw*dtw*ip.alpha*ip.alpha;
 
     for (int i=0; i<local_n0; i++)
     for (int j=0; j<N1; j++)
     {
         int ndx = i*N1r + j;
 
-        w_new[ndx] = dtg2*(2*w[ndx] - (dtg-1)*w_old[ndx] - dta2*dFdw[ndx]);
+        w_new[ndx] = dtg2*(2*w[ndx] + (dtg-1)*w_old[ndx] - dta2*dFdw[ndx]);
 
         w_old[ndx] = w[ndx];
         w[ndx] = w_new[ndx];
+    }
+}
+
+void add_w_noise(double * w, ptrdiff_t local_n0, ptrdiff_t N1)
+{
+    const int N1r = 2*(N1/2+1);
+    double epdt2 = 0.00004;
+
+    for (int i=0; i<local_n0; i++)
+    for (int j=0; j<N1; j++)
+    {
+        int ndx = i*N1r + j;
+        double rnum = rand() / (double) RAND_MAX;
+        rnum = 2*rnum - 1;
+        w[ndx] = w[ndx] + epdt2*rnum;
     }
 }
 
@@ -835,10 +1021,11 @@ int main(int argc, char ** argv)
     double *** sigeps;  // sig0*eps0                sigeps[p][q][ndx]
     double ** epsbar;   // homogeneous strain       epsbar[i][j]
     double *** eps;     // heterogeneous strain     eps[p][i][j][ndx]
-    double *** s0n2;    // sig0*eta                 s0n2[i][j][ndx]
+    double *** s0n2;    // sig0*eta                 s0n2[p][i+j][ndx]
     double ** chem;     // chemical potential       chem[p][ndx]
     double * w;         // out-of-plane bending     w[ndx]
-    double ** dw;       // dw/dx, dw/dy             dw[i][ndx]
+    double ** dw;       // first derivatives        dw[i][ndx]
+    double ** ddw;      // second derivatives       dw[i+j][ndx]
     double * dFdw;      // delta F / delta w        dFdw[ndx]                    
     double * w_old;
     double * w_new;
@@ -863,6 +1050,7 @@ int main(int argc, char ** argv)
     w_new   = fftw_alloc_real(2*alloc_local);
     dFdw    = fftw_alloc_real(2*alloc_local);
     dw      = (double **) kd_alloc2(sizeof(double), 2, 2, 2*alloc_local);
+    ddw     = (double **) kd_alloc2(sizeof(double), 2, 3, 2*alloc_local);
 
     chem = new double * [3];
     chem[0] = fftw_alloc_real(2*alloc_local);
@@ -1001,7 +1189,8 @@ int main(int argc, char ** argv)
             calc_ks0n2(s0n2, sig0, eta, local_n0, N1);
 
             // calculate the displacement in k-space using greens function
-            calc_uxy(ux, uy, ku, G, kxy, ks0n2, N0, N1, local_n0);
+            //calc_uxy(ux, uy, ku, G, kxy, ks0n2, N0, N1, local_n0);
+            calc_uxy_bending(ux, uy, ku, dw, ddw, lam, G, kxy, ks0n2, N0, N1, local_n0);
 
             // calculate the heterogeneous strain (delta-epsilon) in k-space
             calc_eps(eps, keps, kxy, ku, N0, N1, local_n0);
@@ -1024,13 +1213,16 @@ int main(int argc, char ** argv)
             // the rest for out-of-plane displacements - in progress
 
             // calculate first derivatives of the out-of-plane displacement
-            //calc_dw(dw, w, local_n0, N1, ip.dx);
+            calc_dw(w, dw, ddw, kxy, N0, N1, local_n0);
 
             // calculate the chemical potential of out-of-plane displacement
-            //calc_dFdw(dFdw, w, dw, lam, eps, epsbar, s0n2, kxy, local_n0, N0, N1, ip.kappa);
+            calc_dFdw(dFdw, w, dw, lam, eps, epsbar, s0n2, kxy, local_n0, N0, N1, ip.kappa);
 
             // step w in time using evolution wave equation
-            //update_w(w, w_old, w_new, dFdw, local_n0, N1, ip);
+            update_w(w, w_old, w_new, dFdw, local_n0, N1, ip);
+            add_w_noise(w, local_n0, N1);
+
+            std::cout << "w = " << max(w, local_n0, N1) << std::endl;
 
             // calculate and output area - will change in future versions
             area_fraction = calc_area(eta, local_n0, N0, N1, ip.M1_norm);
